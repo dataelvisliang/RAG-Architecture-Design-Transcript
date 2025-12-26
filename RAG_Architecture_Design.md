@@ -30,13 +30,15 @@ graph TD
     BM25 --> RRF["RRF 融合与去重"]:::process
     SemanticTop --> RRF
     
+    RRF --> DiversityFilter["多样性过滤 (Groupby/MMR)"]:::process
+
     subgraph Rerank_Funnel["2. 阶梯式重排漏斗 (Rerank Funnel)"]
         direction TB
         Rerank1["Rerank 1: 子块精排 (Zerank-2)"]:::rerank
         PullParent["拉取 Parent (2000词)"]:::internal
         Rerank2["Rerank 2: 父块终审 (Zerank-2)"]:::rerank
         
-        RRF --> Rerank1 --> PullParent --> Rerank2
+        DiversityFilter --> Rerank1 --> PullParent --> Rerank2
     end
     
     Rerank2 --> FinalOutput["痛点分析报告"]:::output
@@ -97,6 +99,24 @@ graph TD
 *   **长文本支持:** Zerank-2 优化的 Token 窗口和推理架构可以有效处理 8k 甚至更长的上下文，是“父块终审”阶段的核心。
 *   **逻辑推理精度:** 相比传统的交叉编码器，Zerank-2 在复杂语义逻辑检索（如判断“客户是在抱怨还是在咨询”）上表现出更高的一致性。
 *   **高性能/易于集成:** 它可以提供高性能的推理服务，在满足 SLA (< 1s) 的前提下，提供接近 SOTA 的排序精度。
+
+### 3.5 语义多样性策略：MMR 还是 Groupby？
+
+在当前场景中，**`groupby('meeting_id')` 的优先级高于 MMR (Maximal Marginal Relevance)**。
+
+#### 1. 为什么 Groupby 更重要？
+*   **来源多样性 (Source Breadth):** 业务核心目标是统计“有多少不同客户提到了该痛点”。如果 Top 10 全部来自同一个 Meeting，会导致统计片面。按 `meeting_id` 降采样（如每场会议仅保留前 3 个片段）能确保召回结果的广度。
+*   **Zerank-2 的天然去重:** 后续的 Zerank-2 重排以及最终的 LLM 生成阶段具备极强的逻辑识别能力。如果两个片段语义完全重复，Zerank-2 会自然地为其分配不同的权重，或在报告生成阶段由 LLM 自动合并。
+
+#### 2. 什么时候该引入 MMR？
+如果需求变为：**“请给我列出 5 个完全不同的痛点”**，则需要在 RRF 之后跑一遍 MMR。
+*   **防啰嗦机制:** MMR 是一个“新鲜感”算法。当 Top 100 中充斥着对同一痛点的不同表述（如“登录慢”、“加载久”、“进不去”）时，MMR 能够确保喂给大模型的信息每一句都具备独立价值。
+
+#### 3. 全链路位置总结
+1.  **数据召回:** Snowflake SOS + Vector。
+2.  **初筛去重:** `groupby('meeting_id')`（确保来源广度）。
+3.  **多样性增强 (可选):** MMR（确保语义多样性）。
+4.  **精排阶段:** Zerank-2 (子块 -> 父块)。
 
 ## 4. 全链路 Latency 预估 (SLA)
 

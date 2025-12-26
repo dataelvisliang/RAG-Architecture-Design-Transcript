@@ -29,12 +29,14 @@ graph TD
     BM25 --> RRF["RRF Fusion & De-duplication"]:::process
     VectorSearch --> RRF
     
+    RRF --> DiversityFilter["Diversity Filter (Groupby/MMR)"]:::process
+
     subgraph Rerank_Funnel["2. Rerank Funnel"]
         direction TB
         Rerank1["Rerank 1: Child Chunk (Zerank-2)"]:::rerank
         Rerank2["Rerank 2: Parent Chunk (Zerank-2)"]:::rerank
         
-        RRF --> Rerank1 --> Rerank2
+        DiversityFilter --> Rerank1 --> Rerank2
     end
     
     Rerank2 --> FinalOutput["Final Insight Report"]:::output
@@ -56,6 +58,7 @@ graph TD
 - **[RAG Architecture Design](RAG_Architecture_Design.md):** Detailed technical documentation.
 - **Parent-Child Strategy:** Context-aware retrieval ensuring truthfulness.
 - **Async Dual-Path:** Combining Keyword (Snowflake SOS) and Semantic (Vector) search.
+- **Diversity Strategy:** Prioritizing `Groupby(Meeting_ID)` over MMR to ensure broad customer representation.
 - **Tiered Reranking:** Escalating from short summaries to 8k context for ultimate precision.
 
 ## ⏱️ Latency SLA
