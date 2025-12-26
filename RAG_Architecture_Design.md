@@ -67,20 +67,20 @@ graph TD
 系统接收到 Query 后，通过 `asyncio` 并行开启两个独立任务：
 
 #### 任务 A：全文检索路 (Keyword Path)
-1.  **LLM Rewrite (Keywords):** 将自然语言转化为 3-5 个核心关键词。
-    *   **Prompt 策略:** 
-        > **System:** 你是一个搜索优化专家。请从用户的问题中提取 2-4 个最核心的搜索关键词 (Search Keywords)。
-        > **要求:** 只返回关键词，用空格分隔；忽略虚词 (what, how, is 等)；将词还原为词根形式 (如 concerned -> concern)；如果语境包含隐含意思，请补充 1 个近义词 (如：烦 -> concern)。
+1.  **LLM Rewrite (Keywords - 膨胀策略):** 
+    *   **背景:** Snowflake `SEARCH()` 不支持 `*` 或 `%` 通配符。
+    *   **策略:** 让 LLM 在提取关键词时主动给出**词族变体**（原形、复数、常见时态），并在 SQL 中使用空格分隔（SEARCH 默认为 OR 逻辑）。
+    *   **示例:** `(concern OR concerns OR concerned)`
 2.  **Snowflake SOS 粗筛与排序策略:**
-    *   **为什么不能只靠 `SEARCH()` 自己排序？** Snowflake 的 `SEARCH()` 核心价值在于**极速过滤 (Filtering)**，而非精细排序 (Ranking)。
-    *   **逻辑优化:** 采用 `OR` 逻辑召回，配合 `REGEXP_COUNT` 计数。
-        *   *场景案例:* 用户问题是 `users concern issue`。
-        *   *传统 AND (SEARCH):* 文档 B 只有 `concern issue`，会被直接丢弃，即便它极具价值。
-        *   *优化方案 (OR + REGEXP_COUNT):* 
-            *   文档 A (`users concern issue`): 得分 3 -> 排第 1。
-            *   文档 B (`concern issue`): 得分 2 -> 排第 2 (成功保留召回)。
-    *   **具体动作:** 使用 `SEARCH()` 定位行，利用 `REGEXP_COUNT` 进行词频简单计数排序，过滤至 Top 500。
-3.  **Python BM25 精排:** 在内存中进行 BM25 评分，输出 Top 100。
+    *   **极速定位:** `WHERE SEARCH(child_text, 'concern concerns user users')` 毫秒级捞出候选集。
+    *   **正则评分 (神来之笔):** 虽然搜索不支持通配符，但在评分阶段使用 `REGEXP_COUNT(text, 'concern\w*', 1, 'i')`。
+        *   *价值:* 即使文档是因为 `issue` 被捞出来的，正则评分依然能识别出文中的 `concerns` 并为其重排加分。
+    *   **正则辅助 (可选):** 在 `SEARCH` 结果基础上配合 `OR CHILD_TEXT REGEXP '...'` 进一步补偿极端变体，而不影响全表扫描性能。
+3.  **Python BM25 精排:** 拉取 Top 500 个子块在内存中进行 BM25 评分（考虑 IDF 权重），输出 Top 100。
+
+#### 复合鲁棒性：为什么不担心“漏搜变体”？
+*   **向量路兜底:** BGE-M3 模型天然具备“模糊属性”，会将 `concerns` 和 `concern` 映射到相近空间。
+*   **双路融合 (RRF):** 只要向量路把变体捞回来了，它就会在 RRF 阶段与全文路合并。两路互补，而非单点依赖。
 
 #### 任务 B：语义检索路 (Vector Path)
 1.  **LLM Rewrite (Expansion):** 进行 HyDE 或近义词扩展，重点在于**意图识别与补全**。
