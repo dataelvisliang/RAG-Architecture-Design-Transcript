@@ -107,7 +107,10 @@ graph TD
 2.  **Snowflake Vector Search:** 使用 BGE-M3 向量进行余弦相似度检索，输出 Top 100。
 
 ### 3.3 排序阶段：两次 Rerank 阶梯漏斗 (The Rerank Funnel)
-1.  **RRF 融合与去重:** 综合两路排名，并按 `meeting_id` 去重（确保结果广度）。
+1.  **RRF 融合与去重 (Diversity Strategy):** 综合两路排名，并按 `meeting_id` 去重。
+    *   **为什么不用 MMR (Maximal Marginal Relevance)？**
+        *   **业务优先级:** 我们的痛点分析核心是衡量“影响面”。**来源多样性（Source Breadth）**比**语义去重**更重要。通过 `meeting_id` 去重能确保召回结果来自不同的会议/客户。
+        *   **精排兜底:** 后置的 Zerank-2 重排模型具备极强的语义辨别能力。对于内容雷同的片段，它能通过 Cross-Attention 识别出细微逻辑差异，或在最后生成阶段由 LLM 自动去重合并，因此不需要在早期花费计算资源跑 MMR。
 2.  **Rerank 1 —— 子块精排 (Speed Index):** 针对 100 个 Child Chunks 使用 **Zerank-2**。
     *   **实现细节:** 区别于向量检索（Embedding Similarity），此处的 Rerank 是 **Text-to-Text** 的深度比对。模型会读取 Child Chunk 中的 `[Insight Summary]` 原文，判断其逻辑意图是否真正匹配用户 Query，从而剔除向量检索中的“误读”项。
 3.  **Rerank 2 —— 父块终审 (Truth Index):** 针对 Top 20 对应的 2000 词 Parent Chunks。
