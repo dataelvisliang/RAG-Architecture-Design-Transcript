@@ -6,36 +6,52 @@
 ## 2. 核心架构图
 ```mermaid
 graph TD
-    UserQuery["User Query"] --> LLM_Rewrite["LLM Rewrite / Expansion"]
+    %% Node Definitions
+    UserQuery["User Query"]:::input
+    LLM_Rewrite["LLM Rewrite / Expansion"]:::process
     
     subgraph Retrieval_Stage["1. 异步双路检索 (Async Dual-Path)"]
         direction TB
-        LLM_Rewrite --> TaskA["任务 A: 全文检索路 (Keyword)"]
-        LLM_Rewrite --> TaskB["任务 B: 语义检索路 (Vector)"]
+        TaskA["任务 A: 全文检索路"]:::subtask
+        TaskB["任务 B: 语义检索路"]:::subtask
         
-        TaskA --> SOS["Snowflake SOS 粗筛 (SEARCH)"]
-        SOS --> BM25["Python BM25 精排 (Top 500 -> 100)"]
+        SOS["Snowflake SOS"]:::internal
+        BM25["Python BM25"]:::internal
+        VectorSearch["Snowflake Vector Search"]:::internal
+        SemanticTop["语义召回 Top 100"]:::internal
         
-        TaskB --> VectorSearch["Snowflake Vector Search (BGE-M3)"]
-        VectorSearch --> SemanticTop["语义召回 Top 100"]
+        TaskA --> SOS --> BM25
+        TaskB --> VectorSearch --> SemanticTop
     end
+
+    LLM_Rewrite --> TaskA
+    LLM_Rewrite --> TaskB
     
-    BM25 --> RRF["RRF 融合与去重 (meeting_id)"]
+    BM25 --> RRF["RRF 融合与去重"]:::process
     SemanticTop --> RRF
     
     subgraph Rerank_Funnel["2. 阶梯式重排漏斗 (Rerank Funnel)"]
         direction TB
-        RRF --> Rerank1["Rerank 1: 子块精排 (Zerank-2)"]
-        Rerank1 -->|Top 20| PullParent["根据 ID 拉取 Parent Chunks (2000词)"]
-        PullParent --> Rerank2["Rerank 2: 父块终审 (Zerank-2 - 8k Context)"]
+        Rerank1["Rerank 1: 子块精排 (Zerank-2)"]:::rerank
+        PullParent["拉取 Parent (2000词)"]:::internal
+        Rerank2["Rerank 2: 父块终审 (Zerank-2)"]:::rerank
+        
+        RRF --> Rerank1 --> PullParent --> Rerank2
     end
     
-    Rerank2 -->|Top 10| FinalOutput["最终输出: 痛点分析报告 (GPT-4)"]
+    Rerank2 --> FinalOutput["痛点分析报告"]:::output
 
-    style UserQuery fill:#f9f,stroke:#333,stroke-width:2px
-    style FinalOutput fill:#00ff00,stroke:#333,stroke-width:2px
-    style Retrieval_Stage fill:#e1f5fe,stroke:#01579b,stroke-dasharray: 5 5
-    style Rerank_Funnel fill:#fff3e0,stroke:#e65100,stroke-dasharray: 5 5
+    %% Class Definitions for Premium Look
+    classDef input fill:#EDF2FF,stroke:#4C6EF5,stroke-width:2px,color:#1971C2,font-size:13px;
+    classDef process fill:#F8F9FA,stroke:#495057,stroke-width:2px,color:#212529,font-size:13px;
+    classDef subtask fill:#E3FAFC,stroke:#0C8599,stroke-width:2px,color:#0B7285,font-size:12px;
+    classDef internal fill:#FFF,stroke:#ADB5BD,stroke-width:1px,color:#495057,font-size:12px,stroke-dasharray: 5 5;
+    classDef rerank fill:#FFF4E6,stroke:#FD7E14,stroke-width:2px,color:#D9480F,font-size:13px;
+    classDef output fill:#EBFBEE,stroke:#40C057,stroke-width:2px,color:#2B8A3E,font-size:14px,font-weight:bold;
+
+    %% Subgraph Styling
+    style Retrieval_Stage fill:#f8f9fa,stroke:#dee2e6,stroke-width:1px,color:#868e96
+    style Rerank_Funnel fill:#fff9db,stroke:#fab005,stroke-width:1px,color:#f08c00
 ```
 
 ## 3. 核心设计策略
