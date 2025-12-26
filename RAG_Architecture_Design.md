@@ -71,7 +71,15 @@ graph TD
     *   **Prompt 策略:** 
         > **System:** 你是一个搜索优化专家。请从用户的问题中提取 2-4 个最核心的搜索关键词 (Search Keywords)。
         > **要求:** 只返回关键词，用空格分隔；忽略虚词 (what, how, is 等)；将词还原为词根形式 (如 concerned -> concern)；如果语境包含隐含意思，请补充 1 个近义词 (如：烦 -> concern)。
-2.  **Snowflake SOS 粗筛:** 使用 `SEARCH()` 定位行，利用 `REGEXP_COUNT` 计数过滤至 Top 500。
+2.  **Snowflake SOS 粗筛与排序策略:**
+    *   **为什么不能只靠 `SEARCH()` 自己排序？** Snowflake 的 `SEARCH()` 核心价值在于**极速过滤 (Filtering)**，而非精细排序 (Ranking)。
+    *   **逻辑优化:** 采用 `OR` 逻辑召回，配合 `REGEXP_COUNT` 计数。
+        *   *场景案例:* 用户问题是 `users concern issue`。
+        *   *传统 AND (SEARCH):* 文档 B 只有 `concern issue`，会被直接丢弃，即便它极具价值。
+        *   *优化方案 (OR + REGEXP_COUNT):* 
+            *   文档 A (`users concern issue`): 得分 3 -> 排第 1。
+            *   文档 B (`concern issue`): 得分 2 -> 排第 2 (成功保留召回)。
+    *   **具体动作:** 使用 `SEARCH()` 定位行，利用 `REGEXP_COUNT` 进行词频简单计数排序，过滤至 Top 500。
 3.  **Python BM25 精排:** 在内存中进行 BM25 评分，输出 Top 100。
 
 #### 任务 B：语义检索路 (Vector Path)
