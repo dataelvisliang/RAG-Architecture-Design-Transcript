@@ -66,21 +66,33 @@ graph TD
 ### 3.2 检索阶段：异步并发处理 (Async Dual-Path Retrieval)
 系统接收到 Query 后，通过 `asyncio` 并行开启两个独立任务：
 
-#### 任务 A：全文检索路 (Keyword Path)
-1.  **LLM Rewrite (Keywords - 膨胀策略):** 
+#### 任务 A：全文检索路 (Keyword Path) —— “预膨胀”生产方案
+1.  **LLM Rewrite (关键词“预膨胀”):** 
     *   **背景:** Snowflake `SEARCH()` 不支持 `*` 或 `%` 通配符。
-    *   **策略:** 让 LLM 在提取关键词时主动给出**词族变体**（原形、复数、常见时态），并在 SQL 中使用空格分隔（SEARCH 默认为 OR 逻辑）。
-    *   **示例:** `(concern OR concerns OR concerned)`
-2.  **Snowflake SOS 粗筛与排序策略:**
-    *   **极速定位:** `WHERE SEARCH(child_text, 'concern concerns user users')` 毫秒级捞出候选集。
-    *   **正则评分 (神来之笔):** 虽然搜索不支持通配符，但在评分阶段使用 `REGEXP_COUNT(text, 'concern\w*', 1, 'i')`。
-        *   *价值:* 即使文档是因为 `issue` 被捞出来的，正则评分依然能识别出文中的 `concerns` 并为其重排加分。
-    *   **正则辅助 (可选):** 在 `SEARCH` 结果基础上配合 `OR CHILD_TEXT REGEXP '...'` 进一步补偿极端变体，而不影响全表扫描性能。
+    *   **策略:** 让 LLM 在第一步就把活干了。在提取关键词时，主动输出词根及其所有常见变体（复数、时态）。
+    *   **Prompt 示例:** "Extract keywords and their common variations (singular/plural/tense). Output them as a space-separated list."
+    *   **LLM 输出示例:** `user users concern concerns concerned issue issues`
+2.  **Snowflake 精简 SQL 召回与初步评分:**
+    *   **SQL 逻辑:**
+        ```sql
+        SELECT 
+            chunk_id, child_text,
+            -- 评分逻辑：用正则表达式给所有变体打分，确保变体频率高的排在前面
+            (REGEXP_COUNT(child_text, 'user\w*', 1, 'i') + 
+             REGEXP_COUNT(child_text, 'concern\w*', 1, 'i') + 
+             REGEXP_COUNT(child_text, 'issue\w*', 1, 'i')) as simple_score
+        FROM product_insights
+        -- SEARCH 默认是 OR 逻辑，能毫秒级捞出包含任何任一变体的候选集
+        WHERE SEARCH(child_text, 'user users concern concerns concerned issue issues') 
+        ORDER BY simple_score DESC
+        LIMIT 500;
+        ```
+    *   **为什么最稳？** 避开了通配符限制；保持了高速 SOS 索引；利用 `REGEXP_COUNT` 解决了初步排序问题。
 3.  **Python BM25 精排:** 拉取 Top 500 个子块在内存中进行 BM25 评分（考虑 IDF 权重），输出 Top 100。
 
 #### 复合鲁棒性：为什么不担心“漏搜变体”？
-*   **向量路兜底:** BGE-M3 模型天然具备“模糊属性”，会将 `concerns` 和 `concern` 映射到相近空间。
-*   **双路融合 (RRF):** 只要向量路把变体捞回来了，它就会在 RRF 阶段与全文路合并。两路互补，而非单点依赖。
+*   **向量路兜底:** 如果 LLM 没膨胀出某个偏门的变体（如 `worrying`），我们的 **BGE-M3 向量路** 依然会因为它在语义上的接近性将其捞回。
+*   **双路融合 (RRF):** 只要任何一路捕获了变体，它就会进入后续的精排漏斗。
 
 #### 任务 B：语义检索路 (Vector Path)
 1.  **LLM Rewrite (Expansion):** 进行 HyDE 或近义词扩展，重点在于**意图识别与补全**。
@@ -137,5 +149,10 @@ graph TD
 | **父块重排** | Zerank-2 (Long context) | ~400ms | 消除幻觉，确保证据链完整 |
 | **总计** | **End-to-End** | **< 1.0s** | **高性能、高精度的闭环 RAG** |
 
-## 5. 最终输出 (Return to LLM)
-系统最终向生成模型（如 GPT-4）推送 **Top 10 的父块原文**。生成的报告将具备极高的可信度，因为每一项痛点分析都背靠 2000 词的实录原文作为支撑。
+## 5. 架构最终闭环 (The Final Loop)
+
+1.  **Rewrite:** LLM 生成“关键词词族” (Full Keywords Expansion)。
+2.  **Recall:** Snowflake **SEARCH** (高速过滤) + **REGEXP_COUNT** (初步打分) + **Vector Search** (语义补偿)。
+3.  **Rerank 1:** Python **Zerank-2** 对**子块文本**进行高精度语义核验，剔除 80% 噪音。
+4.  **Rerank 2:** Python **Zerank-2** 对**父块原文** (2000词) 进行深度逻辑核验，确保证据链闭环。
+5.  **Output:** 生成模型 (GPT-4) 基于 Top 10 真实客观的父块原文，产出具备极高可信度的痛点分析报告。
