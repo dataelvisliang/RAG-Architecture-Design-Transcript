@@ -12,6 +12,7 @@ graph TD
     UserQuery["User Query"] --> LLM_Rewrite["LLM Rewrite / Expansion"]
     
     subgraph Retrieval_Stage["1. Async Dual-Path Retrieval"]
+        direction TB
         TaskA["Task A: Keyword Path"]
         TaskB["Task B: Vector Path"]
         
@@ -24,9 +25,11 @@ graph TD
         TaskB --> VectorSearch["Snowflake Vector Search"]
     end
     
-    Retrieval_Stage --> RRF["RRF Fusion & De-duplication"]
+    BM25 --> RRF["RRF Fusion & De-duplication"]
+    VectorSearch --> RRF
     
     subgraph Rerank_Funnel["2. Rerank Funnel"]
+        direction TB
         RRF --> Rerank1["Rerank 1: Child Chunk (Zerank-2)"]
         Rerank1 --> Rerank2["Rerank 2: Parent Chunk (Zerank-2)"]
     end

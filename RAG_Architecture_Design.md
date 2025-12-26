@@ -9,6 +9,7 @@ graph TD
     UserQuery["User Query"] --> LLM_Rewrite["LLM Rewrite / Expansion"]
     
     subgraph Retrieval_Stage["1. 异步双路检索 (Async Dual-Path)"]
+        direction TB
         LLM_Rewrite --> TaskA["任务 A: 全文检索路 (Keyword)"]
         LLM_Rewrite --> TaskB["任务 B: 语义检索路 (Vector)"]
         
@@ -19,9 +20,11 @@ graph TD
         VectorSearch --> SemanticTop["语义召回 Top 100"]
     end
     
-    Retrieval_Stage --> RRF["RRF 融合与去重 (meeting_id)"]
+    BM25 --> RRF["RRF 融合与去重 (meeting_id)"]
+    SemanticTop --> RRF
     
     subgraph Rerank_Funnel["2. 阶梯式重排漏斗 (Rerank Funnel)"]
+        direction TB
         RRF --> Rerank1["Rerank 1: 子块精排 (Zerank-2)"]
         Rerank1 -->|Top 20| PullParent["根据 ID 拉取 Parent Chunks (2000词)"]
         PullParent --> Rerank2["Rerank 2: 父块终审 (Zerank-2 - 8k Context)"]
